@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <Wire.h>
+#define trackerPin 22   // 1: config fusb, 2: send src_cap req, 3: send fixed pdo req
 
 const uint8_t PD_ADDR = 0x22;
 uint8_t tx_buf[80];
@@ -9,7 +10,7 @@ int volt_options[5] = {-1,-1,-1,-1,-1};
 int amp_options[5] = {-1,-1,-1,-1,-1};
 int options_pos[5] = {-1,-1,-1,-1,-1};
 int spec_revs[4] = {2,0, 0,0}; // true revision major, true revision minor, true version major, true version minor
-int msg_id = 2;
+int msg_id = 0;
 
 void sendPacket( \
       uint8_t num_data_objects, \
@@ -68,7 +69,7 @@ bool receivePacket() {
   
   receiveBytes(rx_buf, 1);
   if (rx_buf[0] != 0xE0) {
-    Serial1.println("FAIL - receive packet");
+    //Serial1.println("FAIL - receive packet");
     return false;
   }
   receiveBytes(rx_buf, 2);
@@ -84,42 +85,42 @@ bool receivePacket() {
   }else if(message_type == 0x1){
     Serial1.println("GoodCRC Msg received");
     receiveBytes(rx_buf, 4); // crc-32
-    Serial1.println();
+    //Serial1.println();
     return true;
   }else{
     Serial1.println("Control Msg received");
   }
-  Serial1.println("Received SOP Packet");
-  Serial1.print("Header: 0x");
-  Serial1.println(*(int *)rx_buf, HEX);
-  Serial1.print("num_data_objects = ");
-  Serial1.println(num_data_objects, DEC);
-  Serial1.print("message_id       = ");
-  Serial1.println(message_id, DEC);
-  Serial1.print("port_power_role  = ");
-  Serial1.println(port_power_role, DEC);
-  Serial1.print("spec_rev         = ");
-  Serial1.println(spec_rev, DEC);
-  Serial1.print("port_data_role   = ");
-  Serial1.println(port_data_role, DEC);
-  Serial1.print("message_type     = ");
-  Serial1.println(message_type, DEC);
+  // Serial1.println("Received SOP Packet");
+  // Serial1.print("Header: 0x");
+  // Serial1.println(*(int *)rx_buf, HEX);
+  // Serial1.print("num_data_objects = ");
+  // Serial1.println(num_data_objects, DEC);
+  // Serial1.print("message_id       = ");
+  // Serial1.println(message_id, DEC);
+  // Serial1.print("port_power_role  = ");
+  // Serial1.println(port_power_role, DEC);
+  // Serial1.print("spec_rev         = ");
+  // Serial1.println(spec_rev, DEC);
+  // Serial1.print("port_data_role   = ");
+  // Serial1.println(port_data_role, DEC);
+  // Serial1.print("message_type     = ");
+  // Serial1.println(message_type, DEC);
 
   receiveBytes(rx_buf, (num_data_objects*4));
   // each data object is 32 bits
   for (uint8_t i=0; i<num_data_objects; i++) {
-    Serial1.print("Object: 0x");
-    uint32_t byte1 = rx_buf[0 + i*4];
-    uint32_t byte2 = rx_buf[1 + i*4]<<8;
-    uint32_t byte3 = rx_buf[2 + i*4]<<16;
-    uint32_t byte4 = rx_buf[3 + i*4]<<24;
-    Serial1.println(byte1|byte2|byte3|byte4, HEX);
+    // Serial1.print("Object: 0x");
+    // uint32_t byte1 = rx_buf[0 + i*4];
+    // uint32_t byte2 = rx_buf[1 + i*4]<<8;
+    // uint32_t byte3 = rx_buf[2 + i*4]<<16;
+    // uint32_t byte4 = rx_buf[3 + i*4]<<24;
+    // Serial1.println(byte1|byte2|byte3|byte4, HEX);
   }  
   // CRC-32
   receiveBytes(rx_buf, 4);
-  Serial1.print("CRC-32: 0x");
-  Serial1.println(*(long *)rx_buf, HEX);
-  Serial1.println();
+  // Serial1.print("CRC-32: 0x");
+  // Serial1.println(*(long *)rx_buf, HEX);
+  // Serial1.println();
   return true;
 }
 
@@ -173,9 +174,9 @@ void sendPacket( \
   tx_buf[6] |= ((message_id & 0x07) << 1);
   tx_buf[6] |= ((num_data_objects & 0x07) << 4);
 
-  Serial1.print("Sending Header: 0x");
-  Serial1.println((tx_buf[6]<<8)|(tx_buf[5]), HEX);
-  Serial1.println();
+  // Serial1.print("Sending Header: 0x");
+  // Serial1.println((tx_buf[6]<<8)|(tx_buf[5]), HEX);
+  // Serial1.println();
 
   temp = 7;
   for(uint8_t i=0; i<num_data_objects; i++) {
@@ -183,12 +184,12 @@ void sendPacket( \
     tx_buf[temp+1] = data_objects[(4*i)+1];
     tx_buf[temp+2] = data_objects[(4*i)+2];
     tx_buf[temp+3] = data_objects[(4*i)+3];
-    Serial1.print("Data object being sent out: 0x");
-    Serial1.println( (tx_buf[temp+3]<<24)|(tx_buf[temp+2]<<16)|(tx_buf[temp+1]<<8)|(tx_buf[temp]), HEX );
+    // Serial1.print("Data object being sent out: 0x");
+    // Serial1.println( (tx_buf[temp+3]<<24)|(tx_buf[temp+2]<<16)|(tx_buf[temp+1]<<8)|(tx_buf[temp]), HEX );
     temp += 4;
   }
-  Serial1.print("msg_id: ");
-  Serial1.println(message_id, DEC);
+  // Serial1.print("msg_id: ");
+  // Serial1.println(message_id, DEC);
 
   tx_buf[temp] = 0xFF; // CRC
   tx_buf[temp+1] = 0x14; // EOP
@@ -231,19 +232,19 @@ bool read_pdo(){  // modified version of receive packet function that handles sr
   if(message_type == 0x1){
     Serial1.println("src cap msg received");
     spec_revs[0] = spec_rev + 1;
-    Serial1.print("header spec_rev was set to: ");
-    Serial1.println(spec_rev + 1);
+    //Serial1.print("header spec_rev was set to: ");
+    //Serial1.println(spec_rev + 1);
   }else{
     Serial1.println("msg received, but not src cap msg");
     return false;
   }
-  Serial1.print("num_data_objects = ");
-  Serial1.println(num_data_objects, DEC);
+  //Serial1.print("num_data_objects = ");
+  //Serial1.println(num_data_objects, DEC);
 
   receiveBytes(rx_buf, (num_data_objects*4));
   int index = 0;
   for (uint8_t i=0; i<num_data_objects; i++) {
-    Serial1.print("PDO: ");
+    //Serial1.print("PDO: ");
     uint32_t byte1 = rx_buf[0 + i*4];
     uint32_t byte2 = rx_buf[1 + i*4]<<8;
     uint32_t byte3 = rx_buf[2 + i*4]<<16;
@@ -251,15 +252,15 @@ bool read_pdo(){  // modified version of receive packet function that handles sr
     int32_t pdo = byte1|byte2|byte3|byte4;
     switch(pdo>>30){
       case 0x0: // fixed supply
-        Serial1.print("fixed supply pdo: ");
+        //Serial1.print("fixed supply pdo: ");
         volt_options[index] = ((pdo>>10) & 0x3FF)/20;   // Converted to 1 volt units
         amp_options[index] = ((pdo & 0x3FF));   // Left in 10mA units
         options_pos[index] = i+1; // 0001 is always safe5v
-        Serial1.print(volt_options[index], DEC);
-        Serial1.print("V, ");
-        Serial1.print(amp_options[index]*10, DEC);
-        Serial1.print("mA max, ");
-        Serial1.println(options_pos[index]);
+        // Serial1.print(volt_options[index], DEC);
+        // Serial1.print("V, ");
+        // Serial1.print(amp_options[index]*10, DEC);
+        // Serial1.print("mA max, ");
+        // Serial1.println(options_pos[index]);
         index++;
         break;
       case 0x1: // battery supply
@@ -295,6 +296,8 @@ bool get_req_outcome(){ // receive packet function that only analyzes message ty
   if(message_type == 0x3){
     Serial1.println("request accepted");
     return true;
+  }else if(message_type == 0x6){
+    Serial1.println("power supply ready");
   }else{
     return false;
   }
@@ -303,11 +306,13 @@ bool get_req_outcome(){ // receive packet function that only analyzes message ty
 
 void get_src_cap(){
   Serial1.println("fetching src cap info...");
+  //digitalWrite(trackerPin, HIGH);
   sendPacket( 0, msg_id, 0, spec_revs[0]-1, 0, 0x7, NULL );
-  delay(1000);
+  //digitalWrite(trackerPin, LOW);
+  //setReg(0x03, 0x26);
   while ( getReg(0x41) & 0x20 ) { // while RX_empty, wait
     delay(1);}
-  receivePacket();
+  receivePacket();  // I suspect the issue to be here: this func is trashing crc and src cap (in special chargers, src cap might be repeatedly sent after req, but std might not)
   while ( getReg(0x41) & 0x20 ) { // while RX_empty, wait
     delay(1);}
   read_pdo();
@@ -328,20 +333,25 @@ bool sel_src_cap(int volts, int amps){    // 1V and 1A units for input
     }
   }
   if(possible_v & possible_a){
-    Serial1.println("requesting voltage & current...");
+    //Serial1.println("requesting voltage & current...");
     uint32_t request_msg = (options_pos[idx]<<28) | ((amps*100)<<10) | (amp_options[idx]);
     temp_buf[0] = request_msg & 0xFF;
     temp_buf[1] = (request_msg>>8) & 0xFF;
     temp_buf[2] = (request_msg>>16) & 0xFF;
     temp_buf[3] = (request_msg>>24) & 0xFF;
-    Serial1.print("requested obj pos: ");
-    Serial1.println(options_pos[idx]);
+    //Serial1.print("requested obj pos: ");
+    //Serial1.println(options_pos[idx]);
+    //digitalWrite(trackerPin, HIGH);
     sendPacket( 1, msg_id, 0, spec_revs[0]-1, 0, 0x2, temp_buf );
-    delay(1000);
-    while ( getReg(0x41) & 0x20 ) { // while RX_empty, wait
+    //digitalWrite(trackerPin, LOW);
+
+    while ( getReg(0x41) & 0x20 ) { // while RX_empty, wait for goodcrc
       delay(1);}
     receivePacket();
-    while ( getReg(0x41) & 0x20 ) {  // while RX_empty, wait
+    while ( getReg(0x41) & 0x20 ) {  // while RX_empty, wait for accept
+      delay(1);}
+    get_req_outcome();
+    while ( getReg(0x41) & 0x20 ) {  // while RX_empty, wait for ps_rdy
       delay(1);}
     get_req_outcome();
     return true;
@@ -394,7 +404,6 @@ uint32_t read_rmdo(){  // read revision msg data obj
   return rmdo;
 }
 
-
 void get_spec_rev(){   // saves revision majors and minors
   sendPacket( 0, msg_id, 0, spec_revs[0]-1, 0, 0x18, NULL );
   Serial1.println("fetching revision and version specs...");
@@ -417,29 +426,23 @@ void get_spec_rev(){   // saves revision majors and minors
 
 
 bool pd_init(int volts, int amps){  // figure out why src is rejecting / ignoring rev request
+  //digitalWrite(trackerPin, HIGH);
   setReg(0x0C, 0x01); // Reset FUSB302
   setReg(0x0B, 0x0F); // FULL POWER!  
   setReg(0x07, 0x04); // Flush RX
   setReg(0x02, 0x0B); // Switch on MEAS_CC2
   //setReg(0x02, 0x07); // Switch on MEAS_CC1
-  setReg(0x03, 0x26); // Enable BMC Tx on CC2
+  setReg(0x03, 0x26); // Enable BMC Tx on CC2, autocrc ON (26) OFF (22)
   //setReg(0x03, 0x25); // Enable BMC Tx on CC1
+  //digitalWrite(trackerPin, LOW);
 
-  readAllRegs();
-  delay(200);
-  Serial1.println("------------------------------------------");
+  //get_src_cap(); // autocrc is turned ON here (disabled)
 
-  readAllRegs();
+  while ( getReg(0x41) & 0x20 ) { // while RX_empty, wait
+    delay(1);}
   read_pdo();
-  Serial1.println("------------------------------------------");
-
-  readAllRegs();
-  Serial1.println("------------------------------------------");
-  
-  delay(50);
   sel_src_cap(volts, amps);
-  readAllRegs();
-  Serial1.println("------------------------------------------");
+
 
   //get_spec_rev();
 
@@ -453,6 +456,7 @@ void setup() {
   // put your setup code here, to run once:
   Serial1.begin(115200);
   Wire.begin();
+  pinMode(trackerPin, OUTPUT);
   delay(500);
 
   pd_init(9, 1);  
