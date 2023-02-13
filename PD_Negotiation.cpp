@@ -281,8 +281,6 @@ bool read_pdo(){  // modified version of receive packet function that handles sr
   receiveBytes(rx_buf, 4);
   return true;
 }
-
-
 bool get_req_outcome(){ // receive packet function that only analyzes message type for "accept" for control packets
   uint8_t message_type;
 
@@ -302,7 +300,85 @@ bool get_req_outcome(){ // receive packet function that only analyzes message ty
     return false;
   }
 }
+uint32_t read_rmdo(){  // read revision msg data obj
+  uint8_t num_data_objects;
+  uint8_t spec_rev;
+  uint8_t message_type;
+  
+  receiveBytes(rx_buf, 1);
+  if (rx_buf[0] != 0xE0) {
+    Serial1.println("NO RESPONSE RECEIVED - read rmdo");
+    return 0;
+  }
+  receiveBytes(rx_buf, 2);
+  num_data_objects = ((rx_buf[1] & 0x70) >> 4);
+  spec_rev         = ((rx_buf[0] & 0xC0) >> 6);
+  message_type     = (rx_buf[0] & 0x0F);
+  if((message_type == 0xC) && (num_data_objects==1)){
+    Serial1.println("RMDO Msg received");
+  }else{
+    Serial1.print("Expected RMDO, incorrect packet type received. Received type: ");
+    Serial1.println(message_type, BIN);
+    Serial1.print("num of data objs: ");
+    Serial1.println(num_data_objects);
+    return 0;
+  }
+  receiveBytes(rx_buf, (num_data_objects*4));
+  Serial1.print("RMDO: 0x");
+  uint32_t byte1 = rx_buf[0];
+  uint32_t byte2 = rx_buf[1]<<8;
+  uint32_t byte3 = rx_buf[2]<<16;
+  uint32_t byte4 = rx_buf[3]<<24;
+  uint32_t rmdo = byte1|byte2|byte3|byte4;
+  Serial1.println(byte1|byte2|byte3|byte4, HEX);  
+  // CRC-32
+  receiveBytes(rx_buf, 4);
+  // Serial1.print("CRC-32: 0x");
+  // Serial1.println(*(long *)rx_buf, HEX);
+  Serial1.println();
+  return rmdo;
+}
+bool read_rest(int volts, int amps){ // recursion to read out rest of trailing messages (vendor defined, etc)
+  uint8_t temp_buf[80] = {};
+  uint8_t message_type;
+  uint8_t num_data_objects;
 
+  receiveBytes(rx_buf, 1);
+  if (rx_buf[0] != 0xE0) {
+    Serial1.println("no more trailing messages - read rest");
+    return true;
+  }
+  receiveBytes(rx_buf, 2);
+  num_data_objects = ((rx_buf[1] & 0x70) >> 4);
+  message_type = (rx_buf[0] & 0x0F);
+  if((num_data_objects>0) && (message_type == 0xF)){
+    Serial1.println("vendor defined messages - read rest");
+    read_rest(volts, amps);
+    return true;
+  }else if((num_data_objects==0) && (message_type == 0x8)){
+    Serial1.println("sink cap requested - read rest");
+    
+    if(volts==5){
+      //uint32_t request_msg = (options_pos[idx]<<28) | ((amps*100)<<10) | (amp_options[idx]);
+      //temp_buf[0] = request_msg & 0xFF;
+      //temp_buf[1] = (request_msg>>8) & 0xFF;
+      //temp_buf[2] = (request_msg>>16) & 0xFF;
+      //temp_buf[3] = (request_msg>>24) & 0xFF;
+      sendPacket( 1, msg_id, 0, spec_revs[0]-1, 0, 0x4, temp_buf ); // CHECK MESSAGE TYPE
+
+    }else if(volts>5){
+
+      
+      sendPacket( 0, msg_id, 0, spec_revs[0]-1, 0, 0x7, temp_buf ); // CHECK MESSAGE TYPE
+    }
+
+
+    read_rest(volts, amps);
+    return true;
+  }
+
+  return true;
+}
 
 void get_src_cap(){
   Serial1.println("fetching src cap info...");
@@ -317,9 +393,8 @@ void get_src_cap(){
     delay(1);}
   read_pdo();
 }
-
-/*  Must declare this after declaring get_src_cap   */
 bool sel_src_cap(int volts, int amps){    // 1V and 1A units for input
+  uint8_t temp_buf[80] = {};
   bool possible_v = 0;
   bool possible_a = 0;
   int idx = 0;
@@ -364,46 +439,6 @@ bool sel_src_cap(int volts, int amps){    // 1V and 1A units for input
   }
 }
 
-
-uint32_t read_rmdo(){  // read revision msg data obj
-  uint8_t num_data_objects;
-  uint8_t spec_rev;
-  uint8_t message_type;
-  
-  receiveBytes(rx_buf, 1);
-  if (rx_buf[0] != 0xE0) {
-    Serial1.println("NO RESPONSE RECEIVED - read rmdo");
-    return 0;
-  }
-  receiveBytes(rx_buf, 2);
-  num_data_objects = ((rx_buf[1] & 0x70) >> 4);
-  spec_rev         = ((rx_buf[0] & 0xC0) >> 6);
-  message_type     = (rx_buf[0] & 0x0F);
-  if((message_type == 0xC) && (num_data_objects==1)){
-    Serial1.println("RMDO Msg received");
-  }else{
-    Serial1.print("Expected RMDO, incorrect packet type received. Received type: ");
-    Serial1.println(message_type, BIN);
-    Serial1.print("num of data objs: ");
-    Serial1.println(num_data_objects);
-    return 0;
-  }
-  receiveBytes(rx_buf, (num_data_objects*4));
-  Serial1.print("RMDO: 0x");
-  uint32_t byte1 = rx_buf[0];
-  uint32_t byte2 = rx_buf[1]<<8;
-  uint32_t byte3 = rx_buf[2]<<16;
-  uint32_t byte4 = rx_buf[3]<<24;
-  uint32_t rmdo = byte1|byte2|byte3|byte4;
-  Serial1.println(byte1|byte2|byte3|byte4, HEX);  
-  // CRC-32
-  receiveBytes(rx_buf, 4);
-  // Serial1.print("CRC-32: 0x");
-  // Serial1.println(*(long *)rx_buf, HEX);
-  Serial1.println();
-  return rmdo;
-}
-
 void get_spec_rev(){   // saves revision majors and minors
   sendPacket( 0, msg_id, 0, spec_revs[0]-1, 0, 0x18, NULL );
   Serial1.println("fetching revision and version specs...");
@@ -436,21 +471,23 @@ bool pd_init(int volts, int amps){  // figure out why src is rejecting / ignorin
   //setReg(0x03, 0x25); // Enable BMC Tx on CC1
   //digitalWrite(trackerPin, LOW);
 
-  //get_src_cap(); // autocrc is turned ON here (disabled)
 
-  while ( getReg(0x41) & 0x20 ) { // while RX_empty, wait
+  while(getReg(0x41) & 0x20){ // while fifo rx is empty
     delay(1);}
   read_pdo();
-  sel_src_cap(volts, amps);
+  if(sel_src_cap(volts, amps)){
+    //read_rest(volts,amps);
+  }else{
+    delay(2);
+    read_pdo();
+    if(sel_src_cap(volts, amps)){
+      //read_rest(volts,amps);
+      }
+  }
 
-
-  //get_spec_rev();
-
+  setReg(0x07, 0x04); // Flush RX
   return true;
 }
-
-// figure out detecting attach / detach
-
 
 void setup() {
   // put your setup code here, to run once:
@@ -473,11 +510,27 @@ void loop() {
 }
 
 
-/* ORIGINAL
-  temp_buf[0] = 0b01100100;  
-  temp_buf[1] = 0b10010000;  
-  temp_buf[2] = 0b00000001;  
-  temp_buf[3] = 0b00100000;
+/* 
+  //digitalWrite(trackerPin, HIGH);
+  setReg(0x0C, 0x01); // Reset FUSB302
+  setReg(0x0B, 0x0F); // FULL POWER!  
+  setReg(0x07, 0x04); // Flush RX
+  setReg(0x06, 0x0); // Disable interrupt masks
+  //setReg(0x04, 0x40); // Enable Meas_VBUS
+  setReg(0x02, 0x0B); // Switch on MEAS_CC2
+  setReg(0x03, 0x26);
+  Serial1.println("1");
+  Serial1.println(getReg(0x0B));
+  while( (getReg(0x40) & 0x80)==0 ){  // while detached, wait
+    delay(1);
+  }
+  Serial1.print("2");
+  //setReg(0x04, 0); // Disable Meas_VBUS
+  //setReg(0x02, 0x0B); // Switch on MEAS_CC2
+  //setReg(0x02, 0x07); // Switch on MEAS_CC1
+  setReg(0x03, 0x26); // Enable BMC Tx on CC2, autocrc ON (26) OFF (22)
+  //setReg(0x03, 0x25); // Enable BMC Tx on CC1
+  //digitalWrite(trackerPin, LOW);
 */
 
 /* Binary Stream Representation of Sink Capability Messages 
