@@ -1,6 +1,5 @@
 #include <Arduino.h>
 #include <Wire.h>
-#define trackerPin 22   // 1: config fusb, 2: send src_cap req, 3: send fixed pdo req
 
 const uint8_t PD_ADDR = 0x22;
 uint8_t tx_buf[80];
@@ -11,6 +10,10 @@ int amp_options[5] = {-1,-1,-1,-1,-1};
 int options_pos[5] = {-1,-1,-1,-1,-1};
 int spec_revs[4] = {2,0, 0,0}; // true revision major, true revision minor, true version major, true version minor
 int msg_id = 0;
+bool int_flag = 0;
+bool attached = 0;
+int cc_line;
+int vconn_line;
 
 void sendPacket( \
       uint8_t num_data_objects, \
@@ -382,9 +385,7 @@ bool read_rest(int volts, int amps){ // recursion to read out rest of trailing m
 
 void get_src_cap(){
   Serial1.println("fetching src cap info...");
-  //digitalWrite(trackerPin, HIGH);
   sendPacket( 0, msg_id, 0, spec_revs[0]-1, 0, 0x7, NULL );
-  //digitalWrite(trackerPin, LOW);
   //setReg(0x03, 0x26);
   while ( getReg(0x41) & 0x20 ) { // while RX_empty, wait
     delay(1);}
@@ -416,9 +417,7 @@ bool sel_src_cap(int volts, int amps){    // 1V and 1A units for input
     temp_buf[3] = (request_msg>>24) & 0xFF;
     //Serial1.print("requested obj pos: ");
     //Serial1.println(options_pos[idx]);
-    //digitalWrite(trackerPin, HIGH);
     sendPacket( 1, msg_id, 0, spec_revs[0]-1, 0, 0x2, temp_buf );
-    //digitalWrite(trackerPin, LOW);
 
     while ( getReg(0x41) & 0x20 ) { // while RX_empty, wait for goodcrc
       delay(1);}
@@ -438,7 +437,6 @@ bool sel_src_cap(int volts, int amps){    // 1V and 1A units for input
     return false;
   }
 }
-
 void get_spec_rev(){   // saves revision majors and minors
   sendPacket( 0, msg_id, 0, spec_revs[0]-1, 0, 0x18, NULL );
   Serial1.println("fetching revision and version specs...");
@@ -459,17 +457,26 @@ void get_spec_rev(){   // saves revision majors and minors
   }
 }
 
-
+void orient_cc(){ // figure out which cc pin is vconn and which is cc
+  setReg(0x02, 0x07); // measure cc1
+  delay(100);
+  Serial1.print("status0: ");
+  Serial1.println(getReg(0x40), BIN);
+  setReg(0x02, 0x03); // dont measure cc1
+  Serial1.println("-------------------------------------");
+}
 bool pd_init(int volts, int amps){  // figure out why src is rejecting / ignoring rev request
-  //digitalWrite(trackerPin, HIGH);
   setReg(0x0C, 0x01); // Reset FUSB302
   setReg(0x0B, 0x0F); // FULL POWER!  
   setReg(0x07, 0x04); // Flush RX
-  setReg(0x02, 0x0B); // Switch on MEAS_CC2
-  //setReg(0x02, 0x07); // Switch on MEAS_CC1
-  setReg(0x03, 0x26); // Enable BMC Tx on CC2, autocrc ON (26) OFF (22)
-  //setReg(0x03, 0x25); // Enable BMC Tx on CC1
-  //digitalWrite(trackerPin, LOW);
+  int og_control0 = getReg(0x06);
+  setReg(0x06, og_control0 & 0xDF); // disable all interrupt masks
+  setReg(0x42, 0x77); // mask all interrupts except for vbusok and alert
+  setReg(0x02, 0x03); // enable both pull downs to enable attach detection
+  // setReg(0x02, 0x0B); // Switch on MEAS_CC2
+  // setReg(0x02, 0x07); // Switch on MEAS_CC1
+  // setReg(0x03, 0x26); // Enable BMC Tx on CC2, autocrc ON (26) OFF (22)
+  // setReg(0x03, 0x25); // Enable BMC Tx on CC1
 
 
   while(getReg(0x41) & 0x20){ // while fifo rx is empty
@@ -489,60 +496,56 @@ bool pd_init(int volts, int amps){  // figure out why src is rejecting / ignorin
   return true;
 }
 
+void InterruptFlagger(uint gpio, uint32_t events){
+  int_flag = 1;
+}
+void check_vbus(){
+  bool i_vbusok = getReg(0x42)>>7; // from interrupts reg
+  bool i_bc_lvl = getReg(0x42)&1;
+  bool vbusok = getReg(0x40)>>7; // from status0
+  if(i_vbusok){
+    if(vbusok){
+      attached = 1;
+      Serial1.println("attached");
+    }else{
+      attached = 0;
+      Serial1.println("detached");
+    }
+  }if(i_bc_lvl){
+    Serial1.println("change in bc_lvl");
+    Serial1.println("status0: ");
+    Serial1.println(getReg(0x40));
+  }
+}
+
 void setup() {
-  // put your setup code here, to run once:
   Serial1.begin(115200);
   Wire.begin();
-  pinMode(trackerPin, OUTPUT);
+  pinMode(6, INPUT_PULLUP); // interrupt pin from fusb
+  gpio_set_irq_enabled_with_callback(6, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true, &InterruptFlagger); // setup interrupt pin + handler function
+
   delay(500);
 
-  pd_init(9, 1);  
-  
-  /* Request for 1A after specifying the 20V src_cap obj position */
-  // temp_buf[0] = 0b01100100;
-  // temp_buf[1] = 0b10010000;
-  // temp_buf[2] = 0b00000001;
-  // temp_buf[3] = 0b00110000;
-}
-
-void loop() {
-
-}
-
-
-/* 
-  //digitalWrite(trackerPin, HIGH);
   setReg(0x0C, 0x01); // Reset FUSB302
   setReg(0x0B, 0x0F); // FULL POWER!  
   setReg(0x07, 0x04); // Flush RX
-  setReg(0x06, 0x0); // Disable interrupt masks
-  //setReg(0x04, 0x40); // Enable Meas_VBUS
-  setReg(0x02, 0x0B); // Switch on MEAS_CC2
-  setReg(0x03, 0x26);
-  Serial1.println("1");
-  Serial1.println(getReg(0x0B));
-  while( (getReg(0x40) & 0x80)==0 ){  // while detached, wait
-    delay(1);
+  int og_control0 = getReg(0x06);
+  setReg(0x06, og_control0 & 0xDF); // disable all interrupt masks
+  setReg(0x42, 0x77); // mask all interrupts except for vbusok and alert
+  setReg(0x02, 0x03); // enable both pull downs to enable attach detection
+  setReg(0x03, 0x20); // turn off auto goodcrc and set power and data roles to SNK
+}
+
+void loop() {
+  if(int_flag){
+    check_vbus(); // processing attach / detach
+    if(attached){
+      orient_cc();
+      //setReg(0x03, 0x20); // RN PAYLOAD IS INCORRECT, supposed to: turn on auto goodcrc and set cc pin (after orienting)
+      //pd_init(9, 1);
+    }
+    int_flag = 0;
   }
-  Serial1.print("2");
-  //setReg(0x04, 0); // Disable Meas_VBUS
-  //setReg(0x02, 0x0B); // Switch on MEAS_CC2
-  //setReg(0x02, 0x07); // Switch on MEAS_CC1
-  setReg(0x03, 0x26); // Enable BMC Tx on CC2, autocrc ON (26) OFF (22)
-  //setReg(0x03, 0x25); // Enable BMC Tx on CC1
-  //digitalWrite(trackerPin, LOW);
-*/
+}
 
-/* Binary Stream Representation of Sink Capability Messages 
-  1. 00010000000000011001000001100100   (vSafe5V)
-  2. 00000000000001100100000001100100   (Request 20V 1A)
-
-  temp_buf[0] = 0b01100100;
-  temp_buf[1] = 0b10010000;
-  temp_buf[2] = 0b00000001;
-  temp_buf[3] = 0b00010000;
-  temp_buf[4] = 0b01100100;
-  temp_buf[5] = 0b01000000;
-  temp_buf[6] = 0b00000110;
-  temp_buf[7] = 0b00000000;
-*/
+// make cc and vconn detect a function and add it to init
