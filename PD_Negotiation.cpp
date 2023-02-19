@@ -12,6 +12,8 @@ int spec_revs[4] = {2,0, 0,0}; // true revision major, true revision minor, true
 int msg_id = 0;
 bool int_flag = 0;
 bool attached = 0;
+int meas_cc1; // bc lvl after meas cc1
+int meas_cc2;
 int cc_line;
 int vconn_line;
 
@@ -394,7 +396,7 @@ void get_src_cap(){
     delay(1);}
   read_pdo();
 }
-bool sel_src_cap(int volts, int amps){    // 1V and 1A units for input
+bool sel_src_cap(int volts, int amps){    // detect ps_ready commented out
   uint8_t temp_buf[80] = {};
   bool possible_v = 0;
   bool possible_a = 0;
@@ -425,9 +427,9 @@ bool sel_src_cap(int volts, int amps){    // 1V and 1A units for input
     while ( getReg(0x41) & 0x20 ) {  // while RX_empty, wait for accept
       delay(1);}
     get_req_outcome();
-    while ( getReg(0x41) & 0x20 ) {  // while RX_empty, wait for ps_rdy
-      delay(1);}
-    get_req_outcome();
+    // while ( getReg(0x41) & 0x20 ) {  // while RX_empty, wait for ps_rdy
+    //   delay(1);}
+    // get_req_outcome();
     return true;
   }else if(!possible_v){
     Serial1.println("voltage not available");
@@ -457,27 +459,61 @@ void get_spec_rev(){   // saves revision majors and minors
   }
 }
 
-void orient_cc(){ // figure out which cc pin is vconn and which is cc
-  setReg(0x02, 0x07); // measure cc1
-  delay(100);
-  Serial1.print("status0: ");
-  Serial1.println(getReg(0x40), BIN);
-  setReg(0x02, 0x03); // dont measure cc1
-  Serial1.println("-------------------------------------");
-}
-bool pd_init(int volts, int amps){  // figure out why src is rejecting / ignoring rev request
+void reset_fusb(){
   setReg(0x0C, 0x01); // Reset FUSB302
   setReg(0x0B, 0x0F); // FULL POWER!  
   setReg(0x07, 0x04); // Flush RX
-  int og_control0 = getReg(0x06);
-  setReg(0x06, og_control0 & 0xDF); // disable all interrupt masks
-  setReg(0x42, 0x77); // mask all interrupts except for vbusok and alert
-  setReg(0x02, 0x03); // enable both pull downs to enable attach detection
-  // setReg(0x02, 0x0B); // Switch on MEAS_CC2
-  // setReg(0x02, 0x07); // Switch on MEAS_CC1
-  // setReg(0x03, 0x26); // Enable BMC Tx on CC2, autocrc ON (26) OFF (22)
-  // setReg(0x03, 0x25); // Enable BMC Tx on CC1
+  setReg(0x06, 0x00); // disable all interrupt masks
+  setReg(0x0A, 0x77); // mask all interrupts except for vbusok and alert
+  setReg(0x02, 0x03); // enable both pull downs (enables attach detection)
+  setReg(0x03, 0x20); // turn off auto goodcrc and set power and data roles to SNK
+}
+void check_vbus(){
+  bool i_vbusok = getReg(0x42)>>7; // from interrupts reg
+  bool vbusok = getReg(0x40)>>7; // from status0
+  if(i_vbusok){
+    if(vbusok){
+      attached = 1;
+      Serial1.println("ATTACHED");
+    }else{
+      attached = 0;
+      Serial1.println("DETACHED");
+      reset_fusb();
+    }
+  }else{
+    Serial1.println("interrupt triggered but i_vbusok=0");
+  }
+}
+void orient_cc(){ // figure out which cc pin is vconn and which is cc (must be called before init)
+  setReg(0x02, 0x07); // measure cc1
+  delay(150);
+  meas_cc1 = getReg(0x40)&3;
+  Serial1.print("bc lvl after meas_cc1: ");
+  Serial1.println(meas_cc1, BIN);
+  setReg(0x02, 0x0B); // switch to measuring cc2
+  delay(150);
+  meas_cc2 = getReg(0x40)&3;
+  Serial1.print("bc lvl after meas_cc2: ");
+  Serial1.println(meas_cc2, BIN);
 
+  if(meas_cc1>meas_cc2){
+    cc_line = 1;
+    vconn_line = 2;
+  }else{
+    cc_line = 2;
+    vconn_line = 1;
+  }
+}
+bool pd_init(int volts, int amps){  // turns on autocrc after setup disables it
+  //reset_fusb();
+  orient_cc();
+  if(cc_line == 1){
+    setReg(0x02, 0x07); // Switch on MEAS_CC1
+    setReg(0x03, 0x25); // Enable BMC Tx on CC1, autocrc ON (25) OFF (21)
+  }else if(cc_line == 2){
+    setReg(0x02, 0x0B); // Switch on MEAS_CC2
+    setReg(0x03, 0x26); // Enable BMC Tx on CC2, autocrc ON (26) OFF (22)
+  }
 
   while(getReg(0x41) & 0x20){ // while fifo rx is empty
     delay(1);}
@@ -495,28 +531,17 @@ bool pd_init(int volts, int amps){  // figure out why src is rejecting / ignorin
   setReg(0x07, 0x04); // Flush RX
   return true;
 }
+bool reneg_pd(int volts, int amps){ // renegotiates power after init's power negotiation
+  get_src_cap();
+  sel_src_cap(volts, amps);
+}
 
 void InterruptFlagger(uint gpio, uint32_t events){
   int_flag = 1;
 }
-void check_vbus(){
-  bool i_vbusok = getReg(0x42)>>7; // from interrupts reg
-  bool i_bc_lvl = getReg(0x42)&1;
-  bool vbusok = getReg(0x40)>>7; // from status0
-  if(i_vbusok){
-    if(vbusok){
-      attached = 1;
-      Serial1.println("attached");
-    }else{
-      attached = 0;
-      Serial1.println("detached");
-    }
-  }if(i_bc_lvl){
-    Serial1.println("change in bc_lvl");
-    Serial1.println("status0: ");
-    Serial1.println(getReg(0x40));
-  }
-}
+
+// void setup1() {}
+// void loop1() {}
 
 void setup() {
   Serial1.begin(115200);
@@ -524,28 +549,22 @@ void setup() {
   pinMode(6, INPUT_PULLUP); // interrupt pin from fusb
   gpio_set_irq_enabled_with_callback(6, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true, &InterruptFlagger); // setup interrupt pin + handler function
 
-  delay(500);
+  delay(150);
 
-  setReg(0x0C, 0x01); // Reset FUSB302
-  setReg(0x0B, 0x0F); // FULL POWER!  
-  setReg(0x07, 0x04); // Flush RX
-  int og_control0 = getReg(0x06);
-  setReg(0x06, og_control0 & 0xDF); // disable all interrupt masks
-  setReg(0x42, 0x77); // mask all interrupts except for vbusok and alert
-  setReg(0x02, 0x03); // enable both pull downs to enable attach detection
-  setReg(0x03, 0x20); // turn off auto goodcrc and set power and data roles to SNK
+  reset_fusb();
 }
-
 void loop() {
   if(int_flag){
     check_vbus(); // processing attach / detach
     if(attached){
-      orient_cc();
-      //setReg(0x03, 0x20); // RN PAYLOAD IS INCORRECT, supposed to: turn on auto goodcrc and set cc pin (after orienting)
-      //pd_init(9, 1);
+      pd_init(9, 1); // THE PROBLEM
+      Serial1.println("-------------------------------------");
+
+      // delay(5000);
+      // reneg_pd(20, 1);
     }
     int_flag = 0;
   }
 }
 
-// make cc and vconn detect a function and add it to init
+// the interrupt register clears if you read from it or if you manually set it to 0
