@@ -182,8 +182,8 @@ void sendPacket( \
   tx_buf[1]  = 0x12;
   tx_buf[2]  = 0x12;
   tx_buf[3]  = 0x13;
-  tx_buf[4]  = (0x80 | (2 + (4*(num_data_objects & 0x1F))));
-  tx_buf[5]  = (message_type & 0x0F);
+  tx_buf[4]  = (0x80 | (2 + (4*(num_data_objects & 0x07))));
+  tx_buf[5]  = (message_type & 0x1F); // only for extended src cap request
   tx_buf[5] |= ((port_data_role & 0x01) << 5);
   tx_buf[5] |= ((spec_rev & 0x03) << 6);
   tx_buf[6]  = (port_power_role & 0x01);
@@ -205,7 +205,7 @@ void sendPacket( \
   tx_buf[temp+2] = 0xFE; // TXOFF
 
   temp = getReg(0x06);
-  sendBytes(tx_buf, (10+(4*(num_data_objects & 0x1F))) );
+  sendBytes(tx_buf, (10+(4*(num_data_objects & 0x07))) );
   setReg(0x06, (temp | (0x01))); // Flip on TX_START
   msg_id++;
 }
@@ -216,6 +216,18 @@ void sendPacket( \
 
 
 /*  Higher Level Abstractions   */
+
+void read_rx_fifo(){ // for debugging purposes
+  int i = 1;
+  while(!(getReg(0x41) & 0x20)){
+    Serial1.print("byte number ");
+    Serial1.print(i);
+    Serial1.print(": 0x");
+    receiveBytes(rx_buf, 1);
+    Serial1.println(rx_buf[0], HEX);
+    i++;
+  }
+}
 
 bool read_pdo(){  // (spec rev is updated here) modified version of receive packet function that handles src cap pdos
   uint8_t num_data_objects;
@@ -289,6 +301,7 @@ bool read_pdo(){  // (spec rev is updated here) modified version of receive pack
 }
 bool get_req_outcome(){ // receive packet function that only analyzes message type for "accept" for control packets
   uint8_t message_type;
+  uint8_t num_data_objects;
 
   receiveBytes(rx_buf, 1);
   if (getReg(0x41) & 0x20) {
@@ -297,6 +310,8 @@ bool get_req_outcome(){ // receive packet function that only analyzes message ty
   }
   receiveBytes(rx_buf, 2);
   message_type = (rx_buf[0] & 0x0F);
+  num_data_objects = ((rx_buf[1] & 0x70) >> 4);
+  receiveBytes(rx_buf, 4); // crc32
   if(message_type == 0x3){
     Serial1.println("request accepted");
     return true;
@@ -304,6 +319,10 @@ bool get_req_outcome(){ // receive packet function that only analyzes message ty
     Serial1.println("power supply ready");
     return true;
   }else{
+    Serial1.print("error, msg type: ");
+    Serial1.println(message_type, DEC);
+    Serial1.print("num data objects: ");
+    Serial1.println(num_data_objects, DEC);
     return false;
   }
 }
@@ -482,7 +501,7 @@ bool sel_src_cap(int volts, int amps){
     receivePacket();
     while ((getReg(0x41) & 0x20) && (millis()<(time+500))) {}  // while RX_empty, wait for accept
     get_req_outcome(); 
-    setReg(0x07, 0x04); // Flush RX
+    read_rx_fifo();
     while ((getReg(0x41) & 0x20) && (millis()<(time+500))) {}  // while RX_empty, wait for ps_ready
     if(get_req_outcome()){
       return true;
@@ -631,7 +650,6 @@ bool read_rest(int volts, int amps){ // recursion to read out rest of trailing m
   if((num_data_objects==0) & (message_type == 0x8)){ // sink cap requested
     Serial1.println("sink cap requested - read rest");
     receiveBytes(rx_buf, 4); // clear crc-32
-    //setReg(0x07, 0x04); // Flush RX
     send_snk_cap(volts,amps);
     unsigned long time = millis();
     while ( (getReg(0x41) & 0x20) && (millis()<(time+300)) ) {} // while RX_empty, wait for goodcrc
@@ -660,14 +678,13 @@ bool read_rest(int volts, int amps){ // recursion to read out rest of trailing m
     }
     receiveBytes(rx_buf, 4); // CRC-32  
     sel_src_cap(volts, amps);
-    //setReg(0x07, 0x04); // Flush RX
     unsigned long time = millis();
     while ( (getReg(0x41) & 0x20) && (millis()<(time+3300)) ) {} // while RX_empty
     read_rest(volts, amps);
     return true;
-  }else if((num_data_objects>0) & (message_type == 0xF)){ // vdm received (assumed to be dis idt)
+  }else if((num_data_objects>0) & (message_type == 0xF)){ // vdm received (assumed to be discover identity)
+    receiveBytes(rx_buf, (num_data_objects*4));
     receiveBytes(rx_buf, 4); // CRC-32
-    //setReg(0x07, 0x04); // Flush RX
     Serial1.println("vendor defined message received - read rest");
     send_dis_idt_response();
     unsigned long time = millis();
@@ -679,7 +696,6 @@ bool read_rest(int volts, int amps){ // recursion to read out rest of trailing m
   }else if((num_data_objects==0) & (message_type == 0x7)){ // src cap requested
     receiveBytes(rx_buf, 4); // CRC-32
     Serial1.println("src cap requested from src");
-    //setReg(0x07, 0x04); // Flush RX
     sendPacket( 0, 0, msg_id, 0, spec_revs[0]-1, 0, 0x10, NULL );  // rejected: 0x4
     Serial1.println("replied with 'not supported'");
     unsigned long time = millis();
@@ -690,7 +706,6 @@ bool read_rest(int volts, int amps){ // recursion to read out rest of trailing m
   }else if((num_data_objects==0) & (message_type == 0x11)){ // extended src cap requested
     receiveBytes(rx_buf, 4); // CRC-32
     Serial1.println("extended src cap requested from src");
-    //setReg(0x07, 0x04); // Flush RX
     send_ext_src_cap();
     unsigned long time = millis();
     while ( (getReg(0x41) & 0x20) && (millis()<(time+300)) ) {}
@@ -792,19 +807,10 @@ bool pd_init(int volts, int amps){  // turns on autocrc after setup disables it
   read_pdo();
   unsigned long time = millis();
   if(sel_src_cap(volts, amps)){
-    setReg(0x07, 0x04); // Flush RX
     while((getReg(0x41) & 0x20) && (millis()<(time+3300))) {} 
     read_rest(volts,amps);
-  }else{
-    delay(2);
-    read_pdo();
-    if(sel_src_cap(volts, amps)){
-      while((getReg(0x41) & 0x20) && (millis()<(time+3300))) {}
-      read_rest(volts,amps);
-    }
   }
 
-  setReg(0x07, 0x04); // Flush RX
   return true;
 }
 bool reneg_pd(int volts, int amps){ // renegotiates power after init's power negotiation
@@ -814,15 +820,15 @@ bool reneg_pd(int volts, int amps){ // renegotiates power after init's power neg
   return true;
 }
 void recog_dev(){ // fetches vid & pid from extended src cap, {compares them with those in "dev_library," updates dev_type int var}
-  send_dis_idt_request();
-  //sendPacket( 0, 0, msg_id, 0, spec_revs[0]-1, 0, 0x11, NULL ); // ask for ext src cap
+  //send_dis_idt_request();
+  sendPacket( 0, 0, msg_id, 0, 2, 0, 0x11, NULL ); // ask for ext src cap (we temporarily switch to spec rev 3)
   Serial1.println("requested for extended src cap");
   unsigned long time = millis();
   while ( (getReg(0x41) & 0x20) && (millis()<(time+500)) ) {} // while RX_empty, wait
   receivePacket(); // for goodcrc
   while ( (getReg(0x41) & 0x20) && (millis()<(time+500)) ) {} // while RX_empty, wait
-  if(read_dis_idt_response()){ // vdm way
-  //if(read_ext_src_cap()){ // ext src cap way
+  //if(read_dis_idt_response()){ // vdm way
+  if(read_ext_src_cap()){ // ext src cap way
     Serial1.println("vid & pid registered successfully");
   }else{
     Serial1.println("vid & pid detection failed, defaulting dev type to --> charger");
