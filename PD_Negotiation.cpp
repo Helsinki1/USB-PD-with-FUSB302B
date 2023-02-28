@@ -94,7 +94,11 @@ bool receivePacket() {
   port_power_role  = (rx_buf[1] & 0x01);
   spec_rev         = ((rx_buf[0] & 0xC0) >> 6);
   port_data_role   = ((rx_buf[0] & 0x10) >> 5);
-  message_type     = (rx_buf[0] & 0x0F);
+  if(spec_revs[0] = 3){
+    message_type     = (rx_buf[0] & 0x1F);
+  }else{
+    message_type     = (rx_buf[0] & 0x0F);
+  }
   if(num_data_objects){
     Serial1.println("Data Msg received");
   }else if(message_type == 0x1){
@@ -393,19 +397,25 @@ bool read_ext_src_cap(){ // reads extended src cap msg for vid & pid, compares t
       Serial1.println(VID, HEX);
       Serial1.print("Device PID: ");
       Serial1.println(PID, HEX);
+
+
+
+      setReg(0x07, 0x04); // Flush RX
+      return true;
     }else{
       Serial1.print("data size: ");
       Serial1.println(ext_data_size, DEC);
       Serial1.print("msg type: ");
       Serial1.println(message_type, BIN);
+      setReg(0x07, 0x04); // Flush RX
       return false;
     }
   }else{
     Serial1.println("wrong type of message received - read_ext_src_cap");
+    setReg(0x07, 0x04); // Flush RX
     return false;
   }
-  receiveBytes(rx_buf, 4); // captures crc-32
-  return true;
+  return false;
 
 // later on, after filling out the dev_library, add code to do device recognition and be able to update dev_type
 
@@ -501,7 +511,6 @@ bool sel_src_cap(int volts, int amps){
     receivePacket();
     while ((getReg(0x41) & 0x20) && (millis()<(time+500))) {}  // while RX_empty, wait for accept
     get_req_outcome(); 
-    read_rx_fifo();
     while ((getReg(0x41) & 0x20) && (millis()<(time+500))) {}  // while RX_empty, wait for ps_ready
     if(get_req_outcome()){
       return true;
@@ -541,10 +550,9 @@ void send_snk_cap(int volts, int amps){
 }
 void send_dis_idt_request(){
   uint8_t temp_buf[80];
-  uint16_t dev_VID = 0x0451; // pretending to be Texas Instruments
-  uint16_t dev_PID = 0x0422; // pretending to be a TI USB4 port controller with PD capability
+  uint16_t dev_PD_SID = 0xFF00; // SVID field of VDM header must be set to this for dis idt cmd
 
-  uint32_t vdm_header = (dev_VID<<16) | (1<<15) | (1<<13) | (0<<6) | (1); // REQ for Dis Idt
+  uint32_t vdm_header = (dev_PD_SID<<16) | (1<<15) | (0<<13) | (0<<6) | (1); // REQ for Dis Idt
   temp_buf[0] = vdm_header & 0xFF;
   temp_buf[1] = (vdm_header>>8) & 0xFF;
   temp_buf[2] = (vdm_header>>16) & 0xFF;
@@ -553,10 +561,11 @@ void send_dis_idt_request(){
   Serial1.println("fetching discovery identity info...");
 }
 void send_dis_idt_response(){ // sends a response to vdm discovery identity request
-  uint16_t dev_VID = 0x0451; // pretending to be Texas Instruments
-  uint16_t dev_PID = 0x0422; // pretending to be a TI USB4 port controller with PD capability
+  uint16_t dev_VID = 0x0483; // VID given to us from Intel Corp
+  uint16_t dev_PID = 0x1307; // PID given to us from Intel Corp
+  uint16_t dev_PD_SID = 0xFF00; // SVID field of VDM header must be set to this for dis idt cmd
 
-  uint32_t vdm_header = (dev_VID<<16) | (1<<15) | (1<<13) | (1<<6) | (1);
+  uint32_t vdm_header = (dev_PD_SID<<16) | (1<<15) | (1<<13) | (1<<6) | (1);
   uint32_t id_header = (1<<30) | (2<<27) | (2<<21) | (dev_VID);
   uint32_t cert_stat = 0; // empty XID
   uint32_t product_vdo = (dev_PID<<16) | (0); // empty BCDdevice code
@@ -591,8 +600,8 @@ void send_dis_idt_response(){ // sends a response to vdm discovery identity requ
   Serial1.println("vendor response sent");
 }
 void send_ext_src_cap(){
-  uint16_t dev_VID = 0x0451; // pretending to be Texas Instruments
-  uint16_t dev_PID = 0x0422; // pretending to be a TI USB4 port controller with PD capability
+  uint16_t dev_VID = 0x0483; // VID given to us from Intel Corp
+  uint16_t dev_PID = 0x1307; // PID given to us from Intel Corp
 
   temp_buf[0] = 0; // ext msg header
   temp_buf[1] = 0x19; // data size (25 bytes in SCEDB)
@@ -645,7 +654,11 @@ bool read_rest(int volts, int amps){ // recursion to read out rest of trailing m
   }
   receiveBytes(rx_buf, 2);
   num_data_objects = ((rx_buf[1] & 0x70) >> 4);
-  message_type = (rx_buf[0] & 0x0F);
+  if(spec_revs[0]==3){
+    message_type = (rx_buf[0] & 0x1F);
+  }else{
+    message_type = (rx_buf[0] & 0x0F);
+  }
   extended     = (rx_buf[1] >> 7);
   if((num_data_objects==0) & (message_type == 0x8)){ // sink cap requested
     Serial1.println("sink cap requested - read rest");
@@ -705,11 +718,11 @@ bool read_rest(int volts, int amps){ // recursion to read out rest of trailing m
     return true;
   }else if((num_data_objects==0) & (message_type == 0x11)){ // extended src cap requested
     receiveBytes(rx_buf, 4); // CRC-32
-    Serial1.println("extended src cap requested from src");
-    send_ext_src_cap();
-    unsigned long time = millis();
-    while ( (getReg(0x41) & 0x20) && (millis()<(time+300)) ) {}
-    receivePacket();
+    // Serial1.println("ext src cap request ignored"); // commented out to increase speed here
+    // send_ext_src_cap();
+    // unsigned long time = millis();
+    // while ( (getReg(0x41) & 0x20) && (millis()<(time+300)) ) {}
+    // receivePacket();
     read_rest(volts, amps);
     return true;
   }else{
@@ -790,18 +803,28 @@ void orient_cc(){ // figure out which cc pin is vconn and which is cc (must be c
     vconn_line = 1;
   }
 }
-bool pd_init(int volts, int amps){  // turns on autocrc after setup disables it
-  //reset_fusb();
-  orient_cc();
-  if(cc_line == 1){
+void enable_tx_cc(int cc, bool autocrc){
+  if(cc == 1){
     setReg(0x02, 0x07); // Switch on MEAS_CC1
     setReg(0x07, 0x04); // Flush RX
-    setReg(0x03, 0x25); // Enable BMC Tx on CC1, autocrc ON (25) OFF (21)
-  }else if(cc_line == 2){
+    if(autocrc){
+      setReg(0x03, 0x25); // Enable BMC Tx on CC1, autocrc ON (25) OFF (21)
+    }else{
+      setReg(0x03, 0x21);
+    }
+  }else if(cc == 2){
     setReg(0x02, 0x0B); // Switch on MEAS_CC2
     setReg(0x07, 0x04); // Flush RX
-    setReg(0x03, 0x26); // Enable BMC Tx on CC2, autocrc ON (26) OFF (22)
+    if(autocrc){
+      setReg(0x03, 0x26); // Enable BMC Tx on CC2, autocrc ON (26) OFF (22)
+    }else{
+      setReg(0x03, 0x22);
+    }
   }
+}
+bool pd_init(int volts, int amps){  // turns on autocrc after setup disables it
+  orient_cc();
+  enable_tx_cc(cc_line, 1);
 
   while(getReg(0x41) & 0x20){} // while fifo rx is empty
   read_pdo();
@@ -819,21 +842,34 @@ bool reneg_pd(int volts, int amps){ // renegotiates power after init's power neg
   sel_src_cap(volts, amps);
   return true;
 }
-void recog_dev(){ // fetches vid & pid from extended src cap, {compares them with those in "dev_library," updates dev_type int var}
-  //send_dis_idt_request();
-  sendPacket( 0, 0, msg_id, 0, 2, 0, 0x11, NULL ); // ask for ext src cap (we temporarily switch to spec rev 3)
+void recog_dev(int volts, int amps){ // fetches vid & pid from extended src cap, {compares them with those in "dev_library," updates dev_type int var}
+  Serial1.println("(Spec Rev 3)");
+  spec_revs[0] = 3; // we temporarily switch to spec rev 3
+  pd_init(volts, amps);
+
+  sendPacket( 0, 0, msg_id, 0, spec_revs[0]-1, 0, 0x11, NULL ); // ask for ext src cap
   Serial1.println("requested for extended src cap");
   unsigned long time = millis();
   while ( (getReg(0x41) & 0x20) && (millis()<(time+500)) ) {} // while RX_empty, wait
   receivePacket(); // for goodcrc
   while ( (getReg(0x41) & 0x20) && (millis()<(time+500)) ) {} // while RX_empty, wait
-  //if(read_dis_idt_response()){ // vdm way
   if(read_ext_src_cap()){ // ext src cap way
     Serial1.println("vid & pid registered successfully");
   }else{
     Serial1.println("vid & pid detection failed, defaulting dev type to --> charger");
     dev_type = 0;
   }
+
+  setReg(0x09, 0x40);
+  //sendPacket( 0, 0, msg_id, 0, spec_revs[0]-1, 0, 0xD, NULL );
+  Serial1.println("hard reset sent");
+  // time = millis();
+  // while ( (getReg(0x41) & 0x20) && (millis()<(time+500)) ) {} // while RX_empty, wait
+  // receivePacket(); // for goodcrc
+  // while ((getReg(0x41) & 0x20) && (millis()<(time+500))) {}  // while RX_empty, wait for accept
+  // get_req_outcome(); // for accept
+  spec_revs[0] = 2;
+  Serial1.println("(Spec Rev 2)");
 }
 
 void InterruptFlagger(uint gpio, uint32_t events){
@@ -859,9 +895,9 @@ void loop1() {
   if(int_flag){
     check_interrupt(); // processing attach / detach
     if(attached & new_attach){
-      pd_init(5, 1); // THE PROBLEM
+      pd_init(5, 1);
 
-      recog_dev();
+
       Serial1.println("-------------------------------------");
 
       // delay(5000);
