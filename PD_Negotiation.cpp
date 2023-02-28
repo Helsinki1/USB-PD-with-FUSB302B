@@ -823,8 +823,8 @@ void enable_tx_cc(int cc, bool autocrc){
   }
 }
 bool pd_init(int volts, int amps){  // turns on autocrc after setup disables it
-  orient_cc();
-  enable_tx_cc(cc_line, 1);
+  // orient_cc();
+  // enable_tx_cc(cc_line, 1);
 
   while(getReg(0x41) & 0x20){} // while fifo rx is empty
   read_pdo();
@@ -895,6 +895,12 @@ void loop1() {
   if(int_flag){
     check_interrupt(); // processing attach / detach
     if(attached & new_attach){
+      orient_cc();
+      enable_tx_cc(cc_line, 1);
+      recog_dev(5, 1);
+
+      reset_fusb();
+      enable_tx_cc(cc_line, 1);
       pd_init(5, 1);
 
 
