@@ -8,8 +8,8 @@ uint8_t temp_buf[80];
 uint16_t dev_library[10][3] = { // VID, PID, dev type (0:charger, 1:monitor, 2:tablet, 3:laptop/computer)
   {0x2B01, 0xF663, 0}, // long xiaomi charger
   {0x05AC, 0x7109, 2}, // ipad
-  {0,0,0},
-  {0,0,0},
+  {0x413C, 0xB057, 3}, // Dell XPS laptop
+  {0x04E8, 0x0, 2}, // Samsung Fold
   {0,0,0},
   {0,0,0}
   };
@@ -411,6 +411,11 @@ bool read_ext_src_cap(){ // reads extended src cap msg for vid & pid, compares t
       return false;
     }
   }else{
+    if((message_type == 16) & (num_data_objects == 0)){
+      Serial1.println("extended src cap not supported");
+      setReg(0x07, 0x04); // Flush RX
+      return false;
+    }
     Serial1.println("wrong type of message received - read_ext_src_cap");
     setReg(0x07, 0x04); // Flush RX
     return false;
@@ -597,7 +602,22 @@ void send_dis_idt_response(){ // sends a response to vdm discovery identity requ
   temp_buf[19] = (UFP_type_vdo>>24) & 0xFF;
 
   sendPacket( 0, 5, msg_id, 0, spec_revs[0]-1, 0, 0xF, temp_buf );
-  Serial1.println("vendor response sent");
+  Serial1.println("discovery identity response sent");
+}
+void send_dis_svid_response(){ // sends a response to vdm discovery svid request
+  uint16_t dev_VID = 0x0483; // VID given to us from Intel Corp
+  uint16_t dev_PID = 0x1307; // PID given to us from Intel Corp
+  uint16_t dev_PD_SID = 0xFF00; // SVID field of VDM header must be set to this for dis idt cmd
+
+  uint32_t vdm_header = (dev_PD_SID<<16) | (1<<15) | (1<<13) | (2<<6) | (2);
+
+  temp_buf[0] = vdm_header & 0xFF;
+  temp_buf[1] = (vdm_header>>8) & 0xFF;
+  temp_buf[2] = (vdm_header>>16) & 0xFF;
+  temp_buf[3] = (vdm_header>>24) & 0xFF;
+
+  sendPacket( 0, 1, msg_id, 0, spec_revs[0]-1, 0, 0xF, temp_buf );
+  Serial1.println("discovery svid response sent");
 }
 void send_ext_src_cap(){
   uint16_t dev_VID = 0x0483; // VID given to us from Intel Corp
@@ -695,17 +715,31 @@ bool read_rest(int volts, int amps){ // recursion to read out rest of trailing m
     while ( (getReg(0x41) & 0x20) && (millis()<(time+3300)) ) {} // while RX_empty
     read_rest(volts, amps);
     return true;
-  }else if((num_data_objects>0) & (message_type == 0xF)){ // vdm received (assumed to be discover identity)
+  }else if((num_data_objects>0) & (message_type == 0xF)){ // vdm received (discover identity or discover svid)
     receiveBytes(rx_buf, (num_data_objects*4));
+    uint8_t command = rx_buf[0] & 0x1F;
+    uint8_t cmd_type = rx_buf[0] >> 6;
     receiveBytes(rx_buf, 4); // CRC-32
-    Serial1.println("vendor defined message received - read rest");
-    send_dis_idt_response();
-    unsigned long time = millis();
-    while ( (getReg(0x41) & 0x20) && (millis()<(time+300)) ) {}
-    receivePacket();
-    while ( (getReg(0x41) & 0x20) && (millis()<(time+500)) ) {}
-    read_rest(volts, amps);
-    return true;
+
+    if((command==1) & (cmd_type==0)){
+      Serial1.println("discovery identity request vdm - read rest");
+      send_dis_idt_response();
+      unsigned long time = millis();
+      while ( (getReg(0x41) & 0x20) && (millis()<(time+300)) ) {}
+      receivePacket();
+      while ( (getReg(0x41) & 0x20) && (millis()<(time+500)) ) {}
+      read_rest(volts, amps);
+      return true;
+    }else if((command==2) & (cmd_type==0)){
+      Serial1.println("discovery svid request vdm - read rest");
+      send_dis_svid_response();
+      unsigned long time = millis();
+      while ( (getReg(0x41) & 0x20) && (millis()<(time+300)) ) {}
+      receivePacket();
+      while ( (getReg(0x41) & 0x20) && (millis()<(time+500)) ) {}
+      read_rest(volts, amps);
+      return true;
+    }
   }else if((num_data_objects==0) & (message_type == 0x7)){ // src cap requested
     receiveBytes(rx_buf, 4); // CRC-32
     Serial1.println("src cap requested from src");
@@ -897,11 +931,11 @@ void loop1() {
     if(attached & new_attach){
       orient_cc();
       enable_tx_cc(cc_line, 1);
-      recog_dev(5, 1);
+      recog_dev(5, 0.5);
 
       reset_fusb();
       enable_tx_cc(cc_line, 1);
-      pd_init(5, 1);
+      pd_init(5, 0.5);
 
 
       Serial1.println("-------------------------------------");
