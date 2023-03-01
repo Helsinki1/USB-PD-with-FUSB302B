@@ -10,6 +10,7 @@ uint16_t dev_library[10][3] = { // VID, PID, dev type (0:charger, 1:monitor, 2:t
   {0x05AC, 0x7109, 2}, // ipad
   {0x413C, 0xB057, 3}, // Dell XPS laptop
   {0x04E8, 0x0, 2}, // Samsung Fold
+  {0x05C6, 0x0, 2}, // OnePlus Phone (qualcomm processor)
   {0,0,0},
   {0,0,0}
   };
@@ -383,7 +384,11 @@ bool read_ext_src_cap(){ // reads extended src cap msg for vid & pid, compares t
   }
   receiveBytes(rx_buf, 2); // captures header
   num_data_objects = ((rx_buf[1] & 0x70) >> 4);
-  message_type     = (rx_buf[0] & 0x0F); // represents ext msg type
+  if(spec_revs[0] == 3){
+    message_type = (rx_buf[0] & 0x1F); // represents ext msg type
+  }else{
+    message_type = (rx_buf[0] & 0x0F); // represents ext msg type
+  }
   extended_msg     = (rx_buf[1] >> 7);
   if(extended_msg){
     Serial1.println("Extended Msg received");
