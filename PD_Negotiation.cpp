@@ -402,9 +402,12 @@ bool read_ext_src_cap(){ // reads extended src cap msg for vid & pid, compares t
       Serial1.println(VID, HEX);
       Serial1.print("Device PID: ");
       Serial1.println(PID, HEX);
-
-
-
+      for(int i=0; i<10; i++){
+        if((dev_library[i][0]==VID) & (dev_library[i][1]==PID)){
+          dev_type = dev_library[i][2];
+          i=10;
+        }
+      }
       setReg(0x07, 0x04); // Flush RX
       return true;
     }else{
@@ -426,9 +429,6 @@ bool read_ext_src_cap(){ // reads extended src cap msg for vid & pid, compares t
     return false;
   }
   return false;
-
-// later on, after filling out the dev_library, add code to do device recognition and be able to update dev_type
-
 }
 bool read_dis_idt_response(){ // reads dis idt msg for vid & pid, compares them with those in "dev_library", prints them
   uint8_t num_data_objects;
@@ -893,7 +893,16 @@ void recog_dev(int volts, int amps){ // fetches vid & pid from extended src cap,
   receivePacket(); // for goodcrc
   while ( (getReg(0x41) & 0x20) && (millis()<(time+500)) ) {} // while RX_empty, wait
   if(read_ext_src_cap()){ // ext src cap way
-    Serial1.println("vid & pid registered successfully");
+    Serial1.print("vid & pid registered successfully ---> ");
+    if(dev_type==0){
+      Serial1.println("charger");
+    }else if(dev_type==1){
+      Serial1.println("monitor");
+    }else if(dev_type==2){
+      Serial1.println("tablet");
+    }else if(dev_type==3){
+      Serial1.println("laptop/computer");
+    }
   }else{
     Serial1.println("vid & pid detection failed, defaulting dev type to --> charger");
     dev_type = 0;
